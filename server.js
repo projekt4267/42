@@ -114,14 +114,50 @@ export function createServer({pool,password,secure=true}) {
   return server;
 }
 
-if(process.argv[1]===fileURLToPath(import.meta.url)) {
-  if(!process.env.DATABASE_URL || !process.env.ADMIN_PASSWORD) {console.error('Set DATABASE_URL and ADMIN_PASSWORD in Render Environment.');process.exit(1);}
-  const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:4,connectionTimeoutMillis:10000,idleTimeoutMillis:30000,statement_timeout:10000});
-  pool.on('error',()=>console.error('Database connection interrupted.'));
+export function validateSettings(env) {
+  if(!env.ADMIN_PASSWORD) return 'CONFIG: ADMIN_PASSWORD is missing. Add it in Render Environment.';
+  if(env.ADMIN_PASSWORD.length<16) return 'CONFIG: ADMIN_PASSWORD is too short. Use at least 16 characters, save and redeploy.';
+  if(!env.DATABASE_URL) return 'CONFIG: DATABASE_URL is missing. Paste the Neon connection string in Render Environment.';
   try {
+    const url=new URL(env.DATABASE_URL);
+    if(!['postgres:','postgresql:'].includes(url.protocol)||!url.hostname||!url.username||!url.password||url.pathname.length<2||env.DATABASE_URL!==env.DATABASE_URL.trim())throw Error();
+  } catch {return 'CONFIG: DATABASE_URL has an invalid format. Copy only the full postgresql:// connection string, without psql, quotes or spaces.';}
+  return null;
+}
+
+export function startupError(error,stage) {
+  const known={
+    '28P01':'DATABASE: Password authentication failed. Copy a fresh connection string from Neon into DATABASE_URL.',
+    '28000':'DATABASE: Authentication rejected. Check the Neon connection string and database role.',
+    '3D000':'DATABASE: Database does not exist. Copy the connection string for the correct Neon database.',
+    '42501':'DATABASE: This database role cannot create or access the tables. Use the database owner connection string.',
+    'ENOTFOUND':'DATABASE: Hostname not found. Check the Neon hostname in DATABASE_URL.',
+    'ECONNREFUSED':'DATABASE: Connection refused. Check that the Neon project is available.',
+    'ETIMEDOUT':'DATABASE: Connection timed out. Check that the Neon project is available and retry.',
+    'ECONNRESET':'DATABASE: Connection was interrupted. Retry the deploy.',
+    'CERT_HAS_EXPIRED':'DATABASE: TLS certificate expired. Check the database endpoint; do not disable TLS verification.',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE':'DATABASE: TLS certificate verification failed. Check the database endpoint; do not disable verification.'
+  };
+  return known[error?.code] || (stage==='schema'
+    ? 'DATABASE: Connected, but preparing the tables failed. Check database role permissions and existing site_config/wishes tables.'
+    : stage==='connect' ? 'DATABASE: Could not establish a connection. Check Neon project status and copy a fresh connection string; retry after the database wakes up.'
+    : 'SERVER: Startup failed after database initialization. Check the Render runtime settings.');
+}
+
+if(process.argv[1]===fileURLToPath(import.meta.url)) {
+  const settingsError=validateSettings(process.env);
+  if(settingsError){console.error(settingsError);process.exit(1);}
+  const pool=new pg.Pool({connectionString:process.env.DATABASE_URL,max:4,connectionTimeoutMillis:30000,idleTimeoutMillis:30000,statement_timeout:10000});
+  pool.on('error',()=>console.error('Database connection interrupted.'));
+  let stage='connect';
+  try {
+    console.log('Configuration validated. Connecting to database...');
+    await pool.query('SELECT 1');
+    stage='schema';console.log('Database connected. Preparing tables...');
     await initialize(pool);
+    stage='server';
     const server=createServer({pool,password:process.env.ADMIN_PASSWORD,secure:process.env.NODE_ENV!=='development'});
     server.listen(Number(process.env.PORT)||8080,'0.0.0.0',()=>console.log('Website ready. Owner page: /admin'));
     process.on('SIGTERM',()=>server.close(()=>pool.end().finally(()=>process.exit(0))));
-  } catch {console.error('Startup failed. Check DATABASE_URL and ADMIN_PASSWORD (16+ characters).');await pool.end();process.exit(1);}
+  } catch(error) {console.error(startupError(error,stage));await pool.end();process.exit(1);}
 }
