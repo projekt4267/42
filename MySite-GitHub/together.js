@@ -45,7 +45,15 @@
     });
   });
 
+  const fragmentKey = new URLSearchParams(location.hash.slice(1)).get('key');
+  let inviteKey = fragmentKey || '';
+  try {
+    if(fragmentKey) sessionStorage.setItem('wish-invite',fragmentKey);
+    else inviteKey=sessionStorage.getItem('wish-invite')||'';
+  } catch {}
+  if(fragmentKey) history.replaceState(null,'',location.pathname+location.search);
   const draftKey = 'together-wishes-draft';
+  const requestKey = 'together-wishes-request';
   const form = $('wishesForm');
   const text = $('wishesText');
   let confirming = false, sending = false, statusKnown = false, submitted = false;
@@ -61,16 +69,59 @@
     if (!storage.set(draftKey,text.value)) $('wishStatus').textContent = SiteText.get('желания.ошибка_черновика');
   });
   $('editWishes').addEventListener('click', () => { if (!sending) { editMode(); text.focus(); } });
-  function refreshStatus() {
-    statusKnown = false;
-    $('submitWishes').disabled = true;
-    $('wishStatus').textContent = SiteText.get('желания.нет_личной_ссылки');
+  function finish(message) {
+    submitted = true; form.hidden = true; $('wishStatus').textContent = message;
+    $('wishBadge').textContent = SiteText.get('желания.подпись_после_отправки');
+    $('openWishes').textContent = SiteText.get('желания.кнопка_после_отправки');
+    storage.remove(draftKey); storage.remove(requestKey);
+  }
+  async function refreshStatus() {
+    statusKnown = false; $('submitWishes').disabled = true;
+    if (!inviteKey) {
+      $('wishStatus').textContent = SiteText.get('желания.нет_личной_ссылки');
+      return;
+    }
+    try {
+      const r = await fetch('/api/status', {headers:{'X-Invite-Key':inviteKey}, signal:AbortSignal.timeout(90000)});
+      if (!r.ok) throw new Error(r.status === 403 ? 'invite' : 'offline');
+      const data = await r.json(); statusKnown = true;
+      if (data.submitted) finish(SiteText.get('желания.уже_сохранено'));
+      else { $('wishStatus').textContent = ''; $('submitWishes').disabled = false; }
+    } catch (e) {
+      $('wishStatus').textContent = e.message === 'invite' ? SiteText.get('желания.неверная_ссылка') : SiteText.get('желания.нет_связи');
+    }
   }
   $('openWishes').addEventListener('click', () => {
     $('wishesDialog').showModal();
     if (!sending) refreshStatus();
   });
-  form.addEventListener('submit', event => event.preventDefault());
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (sending || submitted || !statusKnown) return;
+    if (!text.value.trim()) { $('wishStatus').textContent = SiteText.get('желания.пустой_список'); text.focus(); return; }
+    if (!confirming) {
+      confirming = true; $('wishConfirm').hidden = false; text.readOnly = true;
+      $('submitWishes').textContent = SiteText.get('желания.кнопка_подтвердить');
+      $('wishConfirm').scrollIntoView({block:'nearest'}); return;
+    }
+    sending = true; $('submitWishes').disabled = true; $('editWishes').disabled = true;
+    $('wishStatus').textContent = SiteText.get('желания.отправляется');
+    let requestId = storage.get(requestKey);
+    if (!requestId || !/^[a-f0-9-]{32,36}$/.test(requestId)) {
+      // getRandomValues also works over a local Wi-Fi HTTP address on phones.
+      requestId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2,'0')).join('');
+      storage.set(requestKey,requestId);
+    }
+    try {
+      const r = await fetch('/api/wishes', {method:'POST', headers:{'Content-Type':'application/json','X-Invite-Key':inviteKey}, body:JSON.stringify({wishes:text.value,requestId}), signal:AbortSignal.timeout(90000)});
+      if (r.status === 409) { finish(SiteText.get('желания.повторная_отправка')); return; }
+      if (!r.ok) throw new Error('save');
+      const data = await r.json(); if (!data.saved) throw new Error('save');
+      finish(SiteText.get('желания.успех'));
+    } catch {
+      $('wishStatus').textContent = SiteText.get('желания.ошибка_отправки');
+    } finally { sending = false; $('submitWishes').disabled = false; $('editWishes').disabled = false; }
+  });
 
   const cities = [
     {name:SiteText.get('карта.город_лёши'),lat:59.37722,lon:28.19028},
