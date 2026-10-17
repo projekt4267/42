@@ -202,3 +202,7 @@ textarea { font-size:16px; }
   .game-hud { padding:8px 16px; }
   .game-hud p { margin:3px 0 0; }
 }
+
+/* Questionnaire follows the existing palette, including dark mode. */
+.modal .survey-choice{display:flex;margin:0;font-weight:400}
+.survey-card{grid-column:1/-1}.survey-modal{width:min(680px,calc(100vw - 28px))}#surveyFields{border:0;padding:0;margin:0;min-width:0}.survey-question{margin:22px 0;padding:18px;border:1px solid var(--line);border-radius:16px;min-width:0}.survey-question legend{font-size:16px;font-weight:600;padding:0 6px;line-height:1.5;color:var(--ink)}.survey-question>label{display:block;margin:14px 0 8px;font-size:13px}.survey-question textarea{font-size:16px;min-height:100px}.survey-choices{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.survey-choice{display:flex;align-items:center;gap:9px;min-height:44px;padding:10px 14px;border:1px solid var(--line);border-radius:24px;background:var(--soft);font-size:14px;cursor:pointer}.survey-choice:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}.survey-choice input{accent-color:var(--accent);width:17px;height:17px;margin:0;flex:none}.survey-question .small-note{display:block;line-height:1.6}#surveyFields:disabled{opacity:.65}@media(max-width:480px){.survey-question{padding:12px}.survey-choice{padding:10px 12px;font-size:13px}}

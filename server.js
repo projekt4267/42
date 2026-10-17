@@ -4,6 +4,7 @@ import { randomBytes, scryptSync, scrypt, timingSafeEqual, createHash } from 'no
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import {loadSurvey,validateSurvey} from './survey.js';
 
 const derive = promisify(scrypt);
 const digest = value => createHash('sha256').update(String(value)).digest();
@@ -12,6 +13,7 @@ export async function initialize(pool) {
   await pool.query(`CREATE TABLE IF NOT EXISTS site_config (id INTEGER PRIMARY KEY CHECK(id=1), invite TEXT NOT NULL)`);
   await pool.query(`INSERT INTO site_config(id,invite) VALUES(1,$1) ON CONFLICT(id) DO NOTHING`,[randomBytes(32).toString('hex')]);
   await pool.query(`CREATE TABLE IF NOT EXISTS wishes (id INTEGER PRIMARY KEY CHECK(id=1), request_id TEXT NOT NULL, body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS survey_responses (request_id TEXT PRIMARY KEY, body TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
 }
 
 export function createServer({pool,password,secure=true}) {
@@ -45,6 +47,8 @@ export function createServer({pool,password,secure=true}) {
     res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     try {
       const url=new URL(req.url,'http://localhost'), route=url.pathname;
+      if(req.method==='GET' && route==='/api/survey/config')return reply(res,200,loadSurvey());
+      if(req.method==='GET' && route==='/survey-ui.js')return reply(res,200,await readFile(new URL('./MySite-GitHub/survey-ui.js',import.meta.url)),'text/javascript; charset=utf-8');
       if(req.method==='POST' && req.headers['sec-fetch-site']==='cross-site') return reply(res,403,{error:'forbidden'});
       if(route==='/healthz' && req.method==='GET') {await pool.query('SELECT 1');return reply(res,200,{ok:true});}
       if(route==='/api/admin/login' && req.method==='POST') {
@@ -72,6 +76,16 @@ export function createServer({pool,password,secure=true}) {
           sessions.delete(token);cookie(res,'',0);return reply(res,200,{ok:true});
         }
         if(req.method!=='GET') return reply(res,405,{error:'method'});
+        if(route==='/api/admin/surveys'||route==='/api/admin/surveys.txt'){
+          const records=await pool.query('SELECT body,created_at FROM survey_responses ORDER BY created_at DESC LIMIT 50');
+          const surveys=records.rows.map(r=>({answers:JSON.parse(r.body),created_at:r.created_at}));
+          if(route.endsWith('.txt')){
+            const copy=loadSurvey().тексты;
+            res.setHeader('Content-Disposition','attachment; filename="survey-answers.txt"');
+            return reply(res,200,'\uFEFF'+surveys.map(s=>copy.кабинет_дата+new Date(s.created_at).toISOString()+'\r\n\r\n'+s.answers.map(a=>a.question+'\r\n'+(a.answer||copy.кабинет_пропуск)).join('\r\n\r\n')).join('\r\n\r\n--------------------\r\n\r\n'),'text/plain; charset=utf-8');
+          }
+          return reply(res,200,{surveys});
+        }
         const {rows}=await pool.query('SELECT body,created_at FROM wishes WHERE id=1');
         if(route==='/api/admin/wishes.txt') {
           if(!rows.length)return reply(res,404,{error:'empty'});
@@ -84,9 +98,16 @@ export function createServer({pool,password,secure=true}) {
         }
         return reply(res,404,{error:'not_found'});
       }
-      if(route==='/api/status'||route==='/api/wishes') {
+      if(route==='/api/status'||route==='/api/wishes'||route==='/api/survey') {
         const config=await pool.query('SELECT invite FROM site_config WHERE id=1');
         if(!equal(req.headers['x-invite-key']||'',config.rows[0].invite))return reply(res,403,{error:'invite'});
+        if(route==='/api/survey'&&req.method==='POST'){
+          const data=await body(req), checked=validateSurvey(data,loadSurvey());
+          if(checked.error)return reply(res,checked.status,{error:checked.error});
+          await pool.query('INSERT INTO survey_responses(request_id,body) VALUES($1,$2) ON CONFLICT(request_id) DO NOTHING',[data.requestId,checked.body]);
+          const saved=await pool.query('SELECT body FROM survey_responses WHERE request_id=$1',[data.requestId]);
+          return saved.rows[0].body===checked.body ? reply(res,200,{saved:true}) : reply(res,409,{error:'request_conflict'});
+        }
         if(route==='/api/status'&&req.method==='GET') {
           const result=await pool.query('SELECT id FROM wishes WHERE id=1');return reply(res,200,{submitted:!!result.rows.length});
         }

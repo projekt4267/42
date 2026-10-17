@@ -38,7 +38,7 @@
       }
     }
     // Load behavior only after the editable file has been read and validated.
-    for (const source of ['./app.js','./together.js']) {
+    for (const source of ['./app.js','./together.js','./survey-ui.js']) {
       await new Promise((resolve,reject) => {
         const script = document.createElement('script');
         script.src = source; script.onload = resolve;

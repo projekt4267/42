@@ -52,6 +52,7 @@
     else inviteKey=sessionStorage.getItem('wish-invite')||'';
   } catch {}
   if(fragmentKey) history.replaceState(null,'',location.pathname+location.search);
+  window.getSiteInviteKey = () => inviteKey;
   const draftKey = 'together-wishes-draft';
   const requestKey = 'together-wishes-request';
   const form = $('wishesForm');
